@@ -1,0 +1,1 @@
+"""Enrichment: análisis LLM + embeddings."""
