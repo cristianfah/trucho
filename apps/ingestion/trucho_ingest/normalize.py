@@ -41,6 +41,71 @@ COUNTRY_ES_TO_ISO = {
     "italia": "IT",
 }
 
+# Nombres de país en inglés (como aparecen en LTWM y el dataset de
+# Internet Archive) → ISO 3166-1 alpha-2.
+COUNTRY_EN_TO_ISO = {
+    "argentina": "AR",
+    "australia": "AU",
+    "austria": "AT",
+    "belgium": "BE",
+    "bolivia": "BO",
+    "brazil": "BR",
+    "canada": "CA",
+    "chile": "CL",
+    "china": "CN",
+    "colombia": "CO",
+    "costa rica": "CR",
+    "cuba": "CU",
+    "czech republic": "CZ",
+    "czechoslovakia": "CZ",
+    "denmark": "DK",
+    "ecuador": "EC",
+    "finland": "FI",
+    "france": "FR",
+    "germany": "DE",
+    "west germany": "DE",
+    "greece": "GR",
+    "guatemala": "GT",
+    "hong kong": "HK",
+    "hungary": "HU",
+    "india": "IN",
+    "ireland": "IE",
+    "israel": "IL",
+    "italy": "IT",
+    "japan": "JP",
+    "lebanon": "LB",
+    "mexico": "MX",
+    "netherlands": "NL",
+    "the netherlands": "NL",
+    "new zealand": "NZ",
+    "norway": "NO",
+    "panama": "PA",
+    "paraguay": "PY",
+    "peru": "PE",
+    "poland": "PL",
+    "portugal": "PT",
+    "puerto rico": "PR",
+    "russia": "RU",
+    "singapore": "SG",
+    "south africa": "ZA",
+    "south korea": "KR",
+    "soviet union": "RU",
+    "spain": "ES",
+    "sweden": "SE",
+    "switzerland": "CH",
+    "thailand": "TH",
+    "turkey": "TR",
+    "united arab emirates": "AE",
+    "united kingdom": "GB",
+    "great britain": "GB",
+    "england": "GB",
+    "united states": "US",
+    "usa": "US",
+    "uruguay": "UY",
+    "venezuela": "VE",
+    "yugoslavia": "RS",
+}
+
 
 def strip_accents(text: str) -> str:
     return "".join(
@@ -62,14 +127,16 @@ def campaign_slug(brand: str, title: str, year: int | None) -> str:
 
 
 def country_to_iso(name: str | None) -> str | None:
-    """Convierte un nombre de país en español a ISO 3166-1 alpha-2."""
+    """Convierte un nombre de país (español o inglés) a ISO 3166-1 alpha-2."""
     if not name:
         return None
     key = strip_accents(name.strip().lower().rstrip("."))
-    # probar con y sin tildes
+    # probar con y sin tildes, en ambos idiomas
     for candidate in (name.strip().lower().rstrip("."), key):
         if candidate in COUNTRY_ES_TO_ISO:
             return COUNTRY_ES_TO_ISO[candidate]
+        if candidate in COUNTRY_EN_TO_ISO:
+            return COUNTRY_EN_TO_ISO[candidate]
     return None
 
 
@@ -78,18 +145,32 @@ def normalized_key(brand: str, title: str) -> str:
     return f"{slugify(brand)}::{slugify(title)}"
 
 
+def _norm_text(text: str) -> str:
+    return slugify(text).replace("-", " ")
+
+
 def is_same_campaign(
     brand_a: str, title_a: str, year_a: int | None,
     brand_b: str, title_b: str, year_b: int | None,
-    threshold: int = 90,
 ) -> bool:
     """Fuzzy matching por (brand + título normalizado + año).
 
-    La misma campaña puede aparecer en múltiples fuentes con variaciones
-    menores de escritura; años pueden diferir en 1 (inscripción vs premiación).
+    La misma campaña aparece en múltiples fuentes con variaciones de escritura:
+    mayúsculas ("THE WHOPPER DETOUR" vs "The Whopper Detour"), artículos
+    ("Whopper Detour"), marcas con alias ("Axe/Lynx" vs "AXE"). Los años
+    pueden diferir en 1 (inscripción vs premiación en festivales distintos).
     """
     if year_a is not None and year_b is not None and abs(year_a - year_b) > 1:
         return False
-    brand_score = fuzz.ratio(slugify(brand_a), slugify(brand_b))
-    title_score = fuzz.ratio(slugify(title_a), slugify(title_b))
-    return brand_score >= threshold and title_score >= threshold
+
+    ta, tb = _norm_text(title_a), _norm_text(title_b)
+    ba, bb = _norm_text(brand_a), _norm_text(brand_b)
+    if not (ta and tb and ba and bb):
+        return False
+
+    # Título: token_set tolera artículos/orden, ratio evita matches por
+    # subconjunto de palabras demasiado laxos.
+    title_ok = fuzz.token_set_ratio(ta, tb) >= 95 and fuzz.ratio(ta, tb) >= 75
+    # Marca: alcanza con que una escritura contenga a la otra (Axe vs Axe/Lynx).
+    brand_ok = fuzz.token_set_ratio(ba, bb) >= 90 or fuzz.ratio(ba, bb) >= 90
+    return title_ok and brand_ok

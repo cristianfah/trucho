@@ -13,7 +13,7 @@ from psycopg.rows import dict_row
 
 from ..config import MIGRATIONS_DIR, database_url
 from ..models import CampaignAnalysis, RawCampaign
-from ..normalize import campaign_slug
+from ..normalize import campaign_slug, is_same_campaign
 
 
 def connect() -> psycopg.Connection:
@@ -55,21 +55,68 @@ def migrate(conn: psycopg.Connection) -> list[str]:
 # Load: upsert de campañas crudas
 # ---------------------------------------------------------------------------
 
-def upsert_raw_campaign(conn: psycopg.Connection, raw: RawCampaign) -> str:
-    """Inserta o actualiza una campaña cruda. Devuelve el campaign_id."""
-    slug = campaign_slug(raw.brand, raw.title, raw.year)
+def find_matching_campaign(conn: psycopg.Connection, raw: RawCampaign) -> str | None:
+    """Busca una campaña existente que sea LA MISMA que `raw` (dedupe cross-fuente).
 
-    row = conn.execute(
+    1. Match exacto por slug (brand + título normalizado + año).
+    2. Match fuzzy: candidatos por similitud trigram de marca y título con
+       ventana de año ±1 (LTWM y Archive traen las mismas campañas 1954-2000;
+       LTWM y El Ojo se solapan en piezas iberoamericanas premiadas en ambos).
+    """
+    slug = campaign_slug(raw.brand, raw.title, raw.year)
+    row = conn.execute("select id from campaigns where slug = %s", (slug,)).fetchone()
+    if row is not None:
+        return row["id"]
+
+    candidates = conn.execute(
         """
-        insert into campaigns (slug, title, brand, year, country)
-        values (%s, %s, %s, %s, %s)
-        on conflict (slug) do update set
-          country = coalesce(campaigns.country, excluded.country)
-        returning id
+        select id, title, brand, year from campaigns
+        where (year is null or %(year)s::int is null
+               or year between %(year)s - 1 and %(year)s + 1)
+          and (similarity(brand, %(brand)s) > 0.3
+               or similarity(title, %(title)s) > 0.3)
+        limit 50
         """,
-        (slug, raw.title, raw.brand, raw.year, raw.country),
-    ).fetchone()
-    campaign_id = row["id"]
+        {"year": raw.year, "brand": raw.brand, "title": raw.title},
+    ).fetchall()
+    for c in candidates:
+        if is_same_campaign(
+            raw.brand, raw.title, raw.year, c["brand"], c["title"], c["year"]
+        ):
+            return c["id"]
+    return None
+
+
+def upsert_raw_campaign(conn: psycopg.Connection, raw: RawCampaign) -> str:
+    """Inserta o fusiona una campaña cruda. Devuelve el campaign_id.
+
+    Si la campaña ya existe (misma u otra fuente), se FUSIONA: se suman
+    premios/links/agencias/fuentes y se completan campos vacíos, sin duplicar
+    la campaña ni pisar el análisis ya generado.
+    """
+    existing_id = find_matching_campaign(conn, raw)
+    if existing_id is not None:
+        conn.execute(
+            """
+            update campaigns set
+              country = coalesce(country, %s),
+              year = coalesce(year, %s)
+            where id = %s
+            """,
+            (raw.country, raw.year, existing_id),
+        )
+        campaign_id = existing_id
+    else:
+        row = conn.execute(
+            """
+            insert into campaigns (slug, title, brand, year, country)
+            values (%s, %s, %s, %s, %s)
+            returning id
+            """,
+            (campaign_slug(raw.brand, raw.title, raw.year), raw.title, raw.brand,
+             raw.year, raw.country),
+        ).fetchone()
+        campaign_id = row["id"]
 
     for agency in raw.agencies:
         arow = conn.execute(
@@ -90,14 +137,45 @@ def upsert_raw_campaign(conn: psycopg.Connection, raw: RawCampaign) -> str:
         )
 
     for award in raw.awards:
-        conn.execute(
-            """
-            insert into awards (campaign_id, festival_id, year, category, tier)
-            select %s, f.id, %s, %s, %s from festivals f where f.slug = %s
-            on conflict do nothing
-            """,
-            (campaign_id, award.year, award.category, award.tier.value, award.festival),
-        )
+        # Fusión de premios cross-fuente: un premio sin categoría (ej: LTWM,
+        # que solo publica el máximo León) NO debe duplicar el mismo premio
+        # ya cargado con categoría (ej: dataset de Archive).
+        if award.category is None:
+            conn.execute(
+                """
+                insert into awards (campaign_id, festival_id, year, category, tier)
+                select %(cid)s, f.id, %(year)s, null, %(tier)s
+                from festivals f
+                where f.slug = %(festival)s
+                  and not exists (
+                    select 1 from awards a
+                    where a.campaign_id = %(cid)s and a.festival_id = f.id
+                      and a.year = %(year)s and a.tier = %(tier)s
+                  )
+                """,
+                {"cid": campaign_id, "year": award.year,
+                 "tier": award.tier.value, "festival": award.festival},
+            )
+        else:
+            conn.execute(
+                """
+                insert into awards (campaign_id, festival_id, year, category, tier)
+                select %s, f.id, %s, %s, %s from festivals f where f.slug = %s
+                on conflict do nothing
+                """,
+                (campaign_id, award.year, award.category, award.tier.value,
+                 award.festival),
+            )
+            # si antes entró el mismo premio sin categoría, ahora sobra
+            conn.execute(
+                """
+                delete from awards a using festivals f
+                where a.festival_id = f.id and f.slug = %s
+                  and a.campaign_id = %s and a.year = %s and a.tier = %s
+                  and a.category is null
+                """,
+                (award.festival, campaign_id, award.year, award.tier.value),
+            )
 
     for link in raw.links:
         conn.execute(
@@ -110,13 +188,15 @@ def upsert_raw_campaign(conn: psycopg.Connection, raw: RawCampaign) -> str:
 
     conn.execute(
         """
-        insert into sources (campaign_id, source_site, source_url, raw_text)
-        values (%s, %s, %s, %s)
+        insert into sources (campaign_id, source_site, source_url, raw_text, confidence)
+        values (%s, %s, %s, %s, %s)
         on conflict (campaign_id, source_site, source_url) do update set
           raw_text = excluded.raw_text,
+          confidence = excluded.confidence,
           scraped_at = now()
         """,
-        (campaign_id, raw.source_site, raw.source_url, raw.raw_text),
+        (campaign_id, raw.source_site, raw.source_url, raw.raw_text,
+         raw.confidence.value),
     )
 
     return campaign_id

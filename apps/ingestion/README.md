@@ -8,6 +8,8 @@ uv sync --extra embed         # + sentence-transformers (pesado, solo para `truc
 
 uv run trucho db migrate
 uv run trucho ingest elojo --year 2025 --limit 30 [--dry-run]
+uv run trucho ingest ltwm                 # Cannes vía lovetheworkmore.com (2015-2025 primero)
+uv run trucho ingest archive-org-cla      # Cannes Film 1954-2000 (dataset Internet Archive)
 uv run trucho enrich          # necesita ANTHROPIC_API_KEY
 uv run trucho embed
 uv run trucho stats
@@ -18,7 +20,7 @@ Configuración vía `.env` en la raíz del repo (ver `.env.example`).
 
 ## Estructura
 
-- `scrapers/` — un scraper por fuente (`elojo` implementado; ver `docs/sources/`)
+- `scrapers/` — un scraper/importer por fuente: `elojo`, `ltwm`, `archive-org-cla` (ver `docs/sources/`)
 - `enrichment/` — prompt + análisis con Claude (`analyze.py`) y embeddings bge-m3 (`embed.py`)
 - `db/repo.py` — migraciones y upserts; un re-scrape nunca pisa análisis ya generado
 - `normalize.py` — slugs, países ISO, fuzzy matching para dedupe
