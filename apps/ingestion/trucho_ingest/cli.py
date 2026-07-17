@@ -82,10 +82,28 @@ def ingest(
 @app.command()
 def enrich(
     limit: int | None = typer.Option(None, help="Máximo de campañas a analizar."),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="Modelo LLM. Sin '/' va a Anthropic (ej: claude-sonnet-4-6); "
+        "con '/' va a OpenRouter (ej: deepseek/deepseek-chat). "
+        "Default: ENRICHMENT_PROVIDER/ENRICHMENT_MODEL del .env.",
+    ),
+    batch: bool = typer.Option(
+        False,
+        "--batch",
+        help="Usa la Batch API de Anthropic (50%% de descuento; solo provider anthropic).",
+    ),
 ) -> None:
     """Genera el análisis LLM (summary, insight, ejecución…) de campañas pendientes."""
+    from .config import resolve_provider_model
     from .db import repo
     from .enrichment.analyze import EnrichmentError, analyze_campaign
+
+    provider, model_id = resolve_provider_model(model)
+    if batch and provider != "anthropic":
+        _err("--batch usa la Batch API de Anthropic; no combina con un modelo de OpenRouter.")
+    typer.echo(f"Enrichment con {provider}/{model_id}" + (" (batch)" if batch else ""))
 
     try:
         with repo.connect() as conn:
@@ -94,27 +112,107 @@ def enrich(
                 typer.echo("No hay campañas pendientes de enrichment.")
                 return
             typer.echo(f"{len(pending)} campañas pendientes…")
-            ok, failed = 0, 0
+            campaigns = []
             for row in pending:
                 campaign = dict(row)
                 for key in ("awards", "agencies"):
                     if isinstance(campaign.get(key), str):
                         campaign[key] = json.loads(campaign[key])
-                try:
-                    analysis = analyze_campaign(campaign)
-                    repo.save_analysis(conn, campaign["id"], analysis)
-                    conn.commit()
-                    ok += 1
-                    typer.secho(f"✓ {campaign['slug']}", fg="green")
-                except EnrichmentError as e:
-                    conn.rollback()
-                    failed += 1
-                    typer.secho(f"✗ {campaign['slug']}: {e}", fg="red", err=True)
+                campaigns.append(campaign)
+
+            if batch:
+                ok, failed = _enrich_batch(conn, campaigns, provider, model_id)
+            else:
+                client = _make_enrich_client(provider)
+                ok, failed = 0, 0
+                for campaign in campaigns:
+                    try:
+                        analysis = analyze_campaign(
+                            campaign, client=client, provider=provider, model=model_id
+                        )
+                        repo.save_analysis(conn, campaign["id"], analysis)
+                        repo.record_analysis_source(conn, campaign["id"], provider, model_id)
+                        conn.commit()
+                        ok += 1
+                        typer.secho(f"✓ {campaign['slug']}", fg="green")
+                    except EnrichmentError as e:
+                        conn.rollback()
+                        failed += 1
+                        typer.secho(f"✗ {campaign['slug']}: {e}", fg="red", err=True)
     except Exception as e:  # noqa: BLE001
         _err(str(e))
     typer.echo(f"Enrichment: {ok} ok, {failed} fallidas.")
     if failed and not ok:
         sys.exit(1)
+
+
+def _make_enrich_client(provider: str):
+    if provider == "openrouter":
+        from .enrichment.openrouter import OpenRouterClient
+
+        return OpenRouterClient()
+    import anthropic
+
+    from .config import anthropic_api_key
+
+    return anthropic.Anthropic(api_key=anthropic_api_key())
+
+
+def _enrich_batch(conn, campaigns: list[dict], provider: str, model_id: str):
+    """Corrida masiva vía Batch API de Anthropic. Lo que no pasa la validación
+    Pydantic se reintenta por el camino sincrónico (que ya trae retries)."""
+    from pydantic import ValidationError
+
+    from .db import repo
+    from .enrichment import batch as batch_mod
+    from .enrichment.analyze import EnrichmentError, analyze_campaign
+    from .models import CampaignAnalysis
+
+    client = batch_mod.make_client()
+    batch_id = batch_mod.submit_batch(campaigns, model=model_id, client=client)
+    typer.echo(f"Batch {batch_id} enviado ({len(campaigns)} campañas). Esperando…")
+
+    def _progress(b):
+        c = b.request_counts
+        typer.echo(
+            f"  …{c.succeeded} ok, {c.errored} error, {c.processing} en proceso"
+        )
+
+    batch_mod.wait_for_batch(batch_id, client=client, on_poll=_progress)
+
+    by_id = {str(c["id"]): c for c in campaigns}
+    ok, failed = 0, 0
+    for custom_id, result in batch_mod.iter_batch_results(batch_id, client=client):
+        campaign = by_id.get(custom_id)
+        if campaign is None:
+            continue
+        analysis = None
+        if result.type == "succeeded":
+            tool_use = next(
+                (b for b in result.message.content if b.type == "tool_use"), None
+            )
+            if tool_use is not None:
+                try:
+                    analysis = CampaignAnalysis.model_validate(tool_use.input)
+                except ValidationError:
+                    analysis = None
+        if analysis is None:
+            # fallback sincrónico con retry-con-feedback
+            try:
+                analysis = analyze_campaign(
+                    campaign, provider=provider, model=model_id
+                )
+            except EnrichmentError as e:
+                conn.rollback()
+                failed += 1
+                typer.secho(f"✗ {campaign['slug']}: {e}", fg="red", err=True)
+                continue
+        repo.save_analysis(conn, campaign["id"], analysis)
+        repo.record_analysis_source(conn, campaign["id"], provider, model_id)
+        conn.commit()
+        ok += 1
+        typer.secho(f"✓ {campaign['slug']}", fg="green")
+    return ok, failed
 
 
 @app.command()

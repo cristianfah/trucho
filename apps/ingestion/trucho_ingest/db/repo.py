@@ -278,6 +278,25 @@ def save_analysis(
         )
 
 
+def record_analysis_source(
+    conn: psycopg.Connection, campaign_id: str, provider: str, model: str
+) -> None:
+    """Registra en sources qué modelo LLM generó el análisis de la campaña.
+
+    Usa source_site='enrichment' y la URL sintética llm://provider/model; si la
+    campaña se re-analiza con otro modelo queda una fila por modelo (historial).
+    """
+    conn.execute(
+        """
+        insert into sources (campaign_id, source_site, source_url, raw_text, confidence)
+        values (%s, 'enrichment', %s, null, 'normal')
+        on conflict (campaign_id, source_site, source_url) do update set
+          scraped_at = now()
+        """,
+        (campaign_id, f"llm://{provider}/{model}"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Embeddings
 # ---------------------------------------------------------------------------

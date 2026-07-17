@@ -19,7 +19,40 @@ USER_AGENT = os.environ.get(
 # Rate limiting: 1 request cada 2 segundos por dominio (scraping ético)
 RATE_LIMIT_SECONDS = 2.0
 
-ENRICH_MODEL = os.environ.get("TRUCHO_ENRICH_MODEL", "claude-sonnet-5")
+# Proveedor de enrichment: "anthropic" (default) u "openrouter" (API
+# OpenAI-compatible, para correr modelos alternativos sobre el mismo prompt).
+ENRICHMENT_PROVIDERS = ("anthropic", "openrouter")
+ENRICHMENT_PROVIDER = os.environ.get("ENRICHMENT_PROVIDER", "anthropic").strip().lower()
+
+DEFAULT_ENRICH_MODELS = {
+    "anthropic": "claude-sonnet-5",
+    "openrouter": "deepseek/deepseek-chat",
+}
+
+# ENRICHMENT_MODEL es el nombre nuevo; TRUCHO_ENRICH_MODEL se acepta por
+# retrocompatibilidad.
+ENRICH_MODEL = (
+    os.environ.get("ENRICHMENT_MODEL")
+    or os.environ.get("TRUCHO_ENRICH_MODEL")
+    or DEFAULT_ENRICH_MODELS.get(ENRICHMENT_PROVIDER, "claude-sonnet-5")
+)
+
+
+def resolve_provider_model(model: str | None = None) -> tuple[str, str]:
+    """Resuelve (provider, model) para el enrichment.
+
+    Con `model` explícito (flag --model) el provider se infiere del formato:
+    los ids de OpenRouter siempre llevan "/" (vendor/model), los de Anthropic no.
+    Sin flag, manda ENRICHMENT_PROVIDER + ENRICHMENT_MODEL del .env.
+    """
+    if model:
+        return ("openrouter" if "/" in model else "anthropic"), model
+    if ENRICHMENT_PROVIDER not in ENRICHMENT_PROVIDERS:
+        raise RuntimeError(
+            f"ENRICHMENT_PROVIDER inválido: '{ENRICHMENT_PROVIDER}'. "
+            f"Valores posibles: {', '.join(ENRICHMENT_PROVIDERS)}."
+        )
+    return ENRICHMENT_PROVIDER, ENRICH_MODEL
 
 EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_DIMS = 1024
@@ -41,5 +74,14 @@ def anthropic_api_key() -> str:
     if not key:
         raise RuntimeError(
             "ANTHROPIC_API_KEY no está definida. El paso de enrichment la necesita."
+        )
+    return key
+
+
+def openrouter_api_key() -> str:
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY no está definida. El enrichment vía OpenRouter la necesita."
         )
     return key
