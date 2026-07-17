@@ -1,0 +1,29 @@
+# Secrets
+.env
+.env.local
+
+# Node
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+uv.lock.orig
+
+# Modelos de embeddings descargados
+.cache/
+
+# Exports generados localmente (los publica CI como release)
+exports/*.jsonl
+exports/skill-bundle/
+
+# OS / editores
+.DS_Store
+.idea/
+.vscode/

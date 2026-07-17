@@ -1,0 +1,23 @@
+{
+  "name": "trucho",
+  "private": true,
+  "description": "Base de conocimiento open source de campañas publicitarias premiadas, consultable vía MCP",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cristianfah/trucho"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "turbo run lint"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0"
+  }
+}
