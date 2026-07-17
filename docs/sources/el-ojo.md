@@ -8,7 +8,7 @@ Evaluamos las fuentes de prioridad 1 antes de escribir código (2026-07):
 
 | Fuente | Veredicto |
 |---|---|
-| **Love The Work More** (lovethework.com) | ❌ Descartada como primera fuente: su `robots.txt` bloquea explícitamente crawlers de AI (lista `Anthropic-ai`, `ClaudeBot`, `GPTBot`… con `Disallow: /`) y el grueso del contenido está detrás de login/paywall de Cannes Lions. Scrapearlo violaría nuestra política de scraping ético. |
+| **Love The Work** (lovethework.com, Informa) | ❌ Descartada: su `robots.txt` bloquea explícitamente crawlers de AI (lista `Anthropic-ai`, `ClaudeBot`, `GPTBot`… con `Disallow: /`) y el grueso del contenido está detrás de login/paywall de Cannes Lions. Scrapearlo violaría nuestra política de scraping ético. **Ojo:** esto NO aplica a lovethework**more**.com, el proyecto independiente y gratuito — ver [ltwm.md](./ltwm.md), que sí está implementado como fuente. |
 | **El Ojo de Iberoamérica** | ✅ **Elegida.** Sin `robots.txt` (todo permitido). Palmarés completo 2012–2025 publicado en HTML estático de WordPress. Datos ricos y consistentes. Además es EL festival de referencia de Iberoamérica, el foco del proyecto. |
 | FIAP (fiaponline.net) | Pendiente de evaluar en detalle (robots.txt extenso con lista de bots bloqueados; revisar en Fase 3). |
 
