@@ -78,6 +78,17 @@ class CampaignAgency(BaseModel):
     country: str | None = Field(default=None, min_length=2, max_length=2)
 
 
+class SourceConfidence(StrEnum):
+    """Confianza en los datos de una fuente para este registro.
+
+    'low' marca datos dudosos: p.ej. el dataset de Internet Archive tiene un
+    error de fechas conocido en los ganadores 1999-2000.
+    """
+
+    NORMAL = "normal"
+    LOW = "low"
+
+
 class RawCampaign(BaseModel):
     """Campaña cruda tal como sale de un scraper, antes del enrichment.
 
@@ -97,6 +108,7 @@ class RawCampaign(BaseModel):
     )
     source_site: str = Field(min_length=1)
     source_url: str
+    confidence: SourceConfidence = SourceConfidence.NORMAL
 
 
 class CampaignAnalysis(BaseModel):

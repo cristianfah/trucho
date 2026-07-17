@@ -71,6 +71,14 @@ export const CampaignAgency = z.object({
 export type CampaignAgency = z.infer<typeof CampaignAgency>;
 
 /**
+ * Confianza en los datos de una fuente para este registro.
+ * 'low' marca datos dudosos (ej: error de fechas conocido en el dataset de
+ * Internet Archive para los ganadores 1999-2000).
+ */
+export const SourceConfidence = z.enum(["normal", "low"]);
+export type SourceConfidence = z.infer<typeof SourceConfidence>;
+
+/**
  * Campaña cruda tal como sale de un scraper, antes del enrichment.
  * Solo hechos: sin análisis redactado.
  */
@@ -88,6 +96,7 @@ export const RawCampaign = z.object({
     .describe("todo el texto crudo recolectado, insumo del enrichment"),
   sourceSite: z.string().min(1),
   sourceUrl: z.string().url(),
+  confidence: SourceConfidence.default("normal"),
 });
 export type RawCampaign = z.infer<typeof RawCampaign>;
 
